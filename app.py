@@ -3,231 +3,171 @@ import pandas as pd
 from fpdf import FPDF
 import datetime
 from collections import Counter
-import pulp
+from pulp import LpProblem, LpVariable, LpMinimize, lpSum, LpInteger
 
 # =========================
-# دالة ILP لتحسين القص
-# =========================
-def optimize_cutting_ilp(lengths, stock_length=12.0):
-    lengths_count = Counter(lengths)
-    unique_lengths = sorted(lengths_count.keys())
-    
-    patterns = []
-    def generate_patterns(current_pattern=[], remaining_lengths=unique_lengths, remaining_stock=stock_length):
-        for l in remaining_lengths:
-            if lengths_count[l] > current_pattern.count(l) and remaining_stock >= l:
-                new_pattern = current_pattern + [l]
-                patterns.append(new_pattern)
-                generate_patterns(new_pattern, remaining_lengths, remaining_stock - l)
-    generate_patterns()
-    
-    unique_patterns = []
-    seen = set()
-    for p in patterns:
-        t = tuple(sorted(p))
-        if t not in seen:
-            seen.add(t)
-            unique_patterns.append(p)
-    
-    prob = pulp.LpProblem("Cutting_Stock", pulp.LpMinimize)
-    pattern_vars = [pulp.LpVariable(f'Pattern_{i}', lowBound=0, cat='Integer') 
-                    for i in range(len(unique_patterns))]
-    prob += pulp.lpSum(pattern_vars)
-    
-    for l in unique_lengths:
-        prob += pulp.lpSum(pattern_vars[i]*unique_patterns[i].count(l) for i in range(len(unique_patterns))) >= lengths_count[l]
-    
-    prob.solve(pulp.PULP_CBC_CMD(msg=0))
-    
-    solution = []
-    for i, var in enumerate(pattern_vars):
-        if var.varValue > 0:
-            for _ in range(int(var.varValue)):
-                solution.append(unique_patterns[i])
-    return solution
+# Settings
+DIAMETERS = [8, 10, 12]
+wpm_dict = {8: 0.395, 10: 0.617, 12: 0.888}  # kg/m
+BAR_LENGTH = 12.0
 
 # =========================
-# دالة توليد PDF
-# =========================
-def generate_pdf(input_df, waste_df, purchase_df, cutting_instr_df, total_input_weight, total_waste_weight, total_purchase_weight, total_purchase_cost):
-    pdf = FPDF(orientation='L')
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    # ------------------------
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, "Rebar Optimization Report", ln=True, align="C")
-    pdf.ln(5)
-    pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 8, "Created by Civil Engineer Moustafa Harmouch", ln=True)
-    pdf.cell(0, 8, f"Date: {datetime.date.today()}", ln=True)
-    pdf.ln(10)
-
-    # ------------------------
-    # MainBar
-    input_df = input_df.sort_values(by=["Diameter", "Length (m)"]).reset_index(drop=True)
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 10, "MainBar (Input Bars)", ln=True)
-    pdf.set_font("Arial", 'B', 9)
-    col_widths_main = [35, 35, 35, 40]
-    headers_main = ["Diameter (mm)", "Length (m)", "Quantity", "Weight (kg)"]
-    for i, header in enumerate(headers_main):
-        pdf.cell(col_widths_main[i], 8, header, border=1, align="C")
-    pdf.ln()
-    pdf.set_font("Arial", '', 9)
-    for _, row in input_df.iterrows():
-        pdf.cell(col_widths_main[0], 8, f"{int(row['Diameter'])}", border=1, align="C")
-        pdf.cell(col_widths_main[1], 8, f"{row['Length (m)']:.2f}", border=1, align="C")
-        pdf.cell(col_widths_main[2], 8, f"{int(row['Quantity'])}", border=1, align="C")
-        pdf.cell(col_widths_main[3], 8, f"{row['Weight (kg)']:.2f}", border=1, align="C")
-        pdf.ln()
-    pdf.set_font("Arial", 'B', 9)
-    pdf.cell(col_widths_main[0]+col_widths_main[1]+col_widths_main[2], 8, "Total Weight (kg)", border=1, align="C")
-    pdf.cell(col_widths_main[3], 8, f"{total_input_weight:.2f}", border=1, align="C")
-    pdf.ln(12)
-
-    # ------------------------
-    # WasteBar
-    waste_df = waste_df.sort_values(by=["Diameter", "Waste Length (m)"]).reset_index(drop=True)
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 8, "WasteBar (Wasted Bars)", ln=True)
-    pdf.set_font("Arial", '', 9)
-    col_widths_waste = [35, 35, 35, 40]
-    headers_waste = ["Diameter (mm)", "Waste Length (m)", "Quantity", "Waste Weight (kg)"]
-    for i, header in enumerate(headers_waste):
-        pdf.cell(col_widths_waste[i], 8, header, border=1, align="C")
-    pdf.ln()
-    for _, row in waste_df.iterrows():
-        pdf.cell(col_widths_waste[0], 8, f"{int(row['Diameter'])}", border=1, align="C")
-        pdf.cell(col_widths_waste[1], 8, f"{row['Waste Length (m)']:.2f}", border=1, align="C")
-        pdf.cell(col_widths_waste[2], 8, f"{int(row['Number of Bars'])}", border=1, align="C")
-        pdf.cell(col_widths_waste[3], 8, f"{row['Waste Weight (kg)']:.2f}", border=1, align="C")
-        pdf.ln()
-    pdf.set_font("Arial", 'B', 9)
-    pdf.cell(col_widths_waste[0]+col_widths_waste[1]+col_widths_waste[2], 8, "Total Waste Weight (kg)", border=1, align="C")
-    pdf.cell(col_widths_waste[3], 8, f"{total_waste_weight:.2f}", border=1, align="C")
-    pdf.ln(12)
-
-    # ------------------------
-    # PurchaseBar
-    purchase_df = purchase_df.sort_values(by=["Diameter"]).reset_index(drop=True)
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 8, "PurchaseBar (12m Bars to Buy)", ln=True)
-    pdf.set_font("Arial", '', 9)
-    col_widths_purchase = [35, 40, 35, 40]
-    headers_purchase = ["Diameter (mm)", "Number of 12m Bars", "Weight (kg)", "Cost ($)"]
-    for i, header in enumerate(headers_purchase):
-        pdf.cell(col_widths_purchase[i], 8, header, border=1, align="C")
-    pdf.ln()
-    for _, row in purchase_df.iterrows():
-        pdf.cell(col_widths_purchase[0], 8, f"{int(row['Diameter'])}", border=1, align="C")
-        pdf.cell(col_widths_purchase[1], 8, f"{int(row['Bars'])}", border=1, align="C")
-        pdf.cell(col_widths_purchase[2], 8, f"{row['Weight (kg)']:.2f}", border=1, align="C")
-        pdf.cell(col_widths_purchase[3], 8, f"{row['Cost']:.2f}", border=1, align="C")
-        pdf.ln()
-    pdf.set_font("Arial", 'B', 9)
-    pdf.cell(col_widths_purchase[0], 8, "Total", border=1, align="C")
-    pdf.cell(col_widths_purchase[1], 8, "", border=1, align="C")
-    pdf.cell(col_widths_purchase[2], 8, f"{total_purchase_weight:.2f}", border=1, align="C")
-    pdf.cell(col_widths_purchase[3], 8, f"{total_purchase_cost:.2f}", border=1, align="C")
-    pdf.ln(12)
-
-    # ------------------------
-    # Cutting Instructions
-    cutting_instr_df = cutting_instr_df.sort_values(by=["Diameter"]).reset_index(drop=True)
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 8, "Cutting Instructions per 12m Bar (ILP Optimized)", ln=True)
-    pdf.set_font("Arial", '', 9)
-    col_widths_cut = [35, 160, 35]
-    headers_cut = ["Diameter (mm)", "Cutting Pattern (m)", "Number of 12m Bars"]
-    for i, header in enumerate(headers_cut):
-        pdf.cell(col_widths_cut[i], 8, header, border=1, align="C")
-    pdf.ln()
-    for _, row in cutting_instr_df.iterrows():
-        pdf.cell(col_widths_cut[0], 8, f"{int(row['Diameter'])}", border=1, align="C")
-        pdf.cell(col_widths_cut[1], 8, f"{row['Pattern']}", border=1, align="C")
-        pdf.cell(col_widths_cut[2], 8, f"{int(row['Count'])}", border=1, align="C")
-        pdf.ln()
-
-    pdf.ln(10)
-    pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 8, "Signature: ____________________", ln=True)
-
-    pdf_file = "Rebar_Optimization_Report.pdf"
-    pdf.output(pdf_file)
-    return pdf_file
-
-# =========================
-# Streamlit UI
-# =========================
-st.title("Rebar Optimizer Pro")
+# Streamlit Interface
+st.title("Rebar Optimizer Pro - Accurate ILP")
 st.subheader("Created by Civil Engineer Moustafa Harmouch")
 
-# أسعار الحديد
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 
-# إدخال الأطوال لكل قطر
-data_dict = {}
-DIAMETERS = [8, 10, 12, 16, 20, 25]  # أمثلة
+# =========================
+# إدخال الأطوال وعدد الأسياخ لكل قطر
 for d in DIAMETERS:
-    lengths_text = st.text_area(f"Enter lengths for {d} mm (comma separated)", key=f"lengths_{d}")
-    if lengths_text:
-        lengths_list = [float(x.strip()) for x in lengths_text.split(",") if x.strip()]
-        if lengths_list:
-            data_dict[d] = lengths_list
+    if f"rows_{d}" not in st.session_state:
+        st.session_state[f"rows_{d}"] = []
 
+st.header("إدخال أطوال الأسياخ لكل قطر")
+
+for d in DIAMETERS:
+    st.subheader(f"القطر {d} mm")
+    length = st.number_input(f"أدخل طول السيخ (متر) للقطر {d}", min_value=0.1, value=1.0, step=0.1, key=f"length_{d}")
+    quantity = st.number_input(f"أدخل عدد الأسياخ لهذا الطول للقطر {d}", min_value=1, value=1, step=1, key=f"qty_{d}")
+    
+    if st.button(f"Add length for {d}mm"):
+        st.session_state[f"rows_{d}"].append((length, quantity))
+    
+    if st.session_state[f"rows_{d}"]:
+        st.write("Current entries:", st.session_state[f"rows_{d}"])
+
+# =========================
+# ILP Optimization Function (Cutting Stock Problem)
+def optimize_cutting_ilp(length_qty_list):
+    """
+    length_qty_list: [(length, quantity), ...]
+    Returns:
+        patterns_per_bar: list of lists, كل قائمة تمثل طول الأسياخ داخل قضيب 12 متر
+        waste_per_bar: list of الهدر لكل قضيب
+    """
+    # توليد قائمة كل الأسياخ مع تكرارها
+    lengths = []
+    for l, q in length_qty_list:
+        lengths.extend([l]*q)
+    
+    n = len(lengths)
+    max_bars = n  # أقصى عدد قضبان (worst case)
+    
+    prob = LpProblem("CuttingStock", LpMinimize)
+    
+    # متغيرات: x[i][j] = 1 إذا وضعت طول i في القضيب j
+    x = [[LpVariable(f"x_{i}_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)] for i in range(n)]
+    y = [LpVariable(f"y_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)]
+    
+    # كل طول يجب أن يوضع مرة واحدة
+    for i in range(n):
+        prob += lpSum([x[i][j] for j in range(max_bars)]) == 1
+    
+    # مجموع الأطوال داخل كل قضيب ≤ 12 متر
+    for j in range(max_bars):
+        prob += lpSum([lengths[i]*x[i][j] for i in range(n)]) <= BAR_LENGTH * y[j]
+    
+    # الهدف: تقليل عدد القضبان المستخدمة
+    prob += lpSum([y[j] for j in range(max_bars)])
+    
+    prob.solve()
+    
+    # استخراج النتائج
+    patterns = []
+    waste_list = []
+    for j in range(max_bars):
+        bar = []
+        total_length = 0
+        for i in range(n):
+            if x[i][j].varValue > 0.5:
+                bar.append(lengths[i])
+                total_length += lengths[i]
+        if bar:
+            patterns.append(bar)
+            waste_list.append(BAR_LENGTH - total_length)
+    
+    return patterns, waste_list
+
+# =========================
+# Run Optimization
 if st.button("Run Optimization"):
-    # تجهيز MainBar
-    input_rows = []
-    for d, lengths in data_dict.items():
-        for l in lengths:
-            qty = 1
-            weight = l * 0.617 * d*d  # مثال على الوزن بالكيغرام (يمكنك تعديل الصيغة حسب الحديد)
-            input_rows.append([d, l, qty, weight])
-    input_df = pd.DataFrame(input_rows, columns=["Diameter","Length (m)","Quantity","Weight (kg)"])
-    total_input_weight = input_df["Weight (kg)"].sum()
 
-    # تجهيز WasteBar (هدر تقريبياً)
-    waste_rows = []
-    for d, lengths in data_dict.items():
-        for l in lengths:
-            waste_rows.append([d, l*0.1, 1, l*0.1*0.617*d*d])  # مثال على الهدر 10% تقريبا
-    waste_df = pd.DataFrame(waste_rows, columns=["Diameter","Waste Length (m)","Number of Bars","Waste Weight (kg)"])
-    total_waste_weight = waste_df["Waste Weight (kg)"].sum()
+    mainbar_data = []
+    waste_data = []
+    purchase_data = []
+    cutting_data = []
 
-    # تجهيز PurchaseBar
-    purchase_rows = []
-    for d, lengths in data_dict.items():
-        total_length = sum(lengths)
-        used_weight = total_length * 0.617 * d*d
-        bars_needed = int((total_length/12) + 0.999)  # تقريب لأعلى
-        cost = used_weight/1000*price
-        purchase_rows.append([d, bars_needed, used_weight, cost])
-    purchase_df = pd.DataFrame(purchase_rows, columns=["Diameter","Bars","Weight (kg)","Cost"])
-    total_purchase_weight = purchase_df["Weight (kg)"].sum()
-    total_purchase_cost = purchase_df["Cost"].sum()
+    for d in DIAMETERS:
+        length_qty = st.session_state[f"rows_{d}"]
+        if not length_qty:
+            continue
+        
+        # MainBar
+        for l, q in length_qty:
+            w = l * q * wpm_dict[d]
+            mainbar_data.append([d, l, q, w])
+        df_main = pd.DataFrame(mainbar_data, columns=["Diameter", "Length", "Quantity", "Weight"])
+        df_main.sort_values("Diameter", inplace=True)
 
-    # تجهيز Cutting Instructions
-    cutting_rows = []
-    for d, lengths in data_dict.items():
-        solution = optimize_cutting_ilp(lengths)
-        pattern_counts = Counter(tuple(bar) for bar in solution)
+        # ILP Optimization لكل قطر
+        patterns, waste_list = optimize_cutting_ilp(length_qty)
+        
+        # WasteBar
+        for bar, waste in zip(patterns, waste_list):
+            weight_waste = waste * wpm_dict[d]
+            waste_data.append([d, round(sum(bar),2), len(bar), round(weight_waste,2)])
+        
+        # PurchaseBar
+        for bar in patterns:
+            total_weight = sum(bar)*wpm_dict[d]
+            cost = total_weight/1000*price
+            purchase_data.append([d, 1, total_weight, cost])
+        
+        # Cutting Instructions
+        pattern_counts = Counter(tuple(bar) for bar in patterns)
         for pattern, count in pattern_counts.items():
-            pattern_str = ' + '.join([f"{l:.2f}" for l in pattern])
-            cutting_rows.append([d, pattern_str, count])
-    cutting_df = pd.DataFrame(cutting_rows, columns=["Diameter","Pattern","Count"])
+            pattern_str = " + ".join([f"{l:.2f} m" for l in pattern])
+            cutting_data.append([d, pattern_str, count])
 
-    # عرض الجداول على Streamlit
-    st.markdown("### MainBar (Input Bars)")
-    st.dataframe(input_df)
-    st.markdown("### WasteBar (Wasted Bars)")
-    st.dataframe(waste_df)
-    st.markdown("### PurchaseBar (12m Bars)")
-    st.dataframe(purchase_df)
-    st.markdown("### Cutting Instructions (ILP Optimized)")
-    st.dataframe(cutting_df)
+    # تحويل إلى DataFrames
+    df_waste = pd.DataFrame(waste_data, columns=["Diameter","Waste Length (m)","Quantity","Weight (kg)"])
+    df_waste.sort_values("Diameter", inplace=True)
+    df_purchase = pd.DataFrame(purchase_data, columns=["Diameter","Bars","Weight (kg)","Cost"])
+    df_purchase.sort_values("Diameter", inplace=True)
+    df_cutting = pd.DataFrame(cutting_data, columns=["Diameter","Pattern","Count"])
+    df_cutting.sort_values("Diameter", inplace=True)
 
-    # إنشاء PDF
-    pdf_file = generate_pdf(input_df, waste_df, purchase_df, cutting_df, total_input_weight, total_waste_weight, total_purchase_weight, total_purchase_cost)
+    # عرض النتائج
+    st.success("Optimization Completed Successfully ✅")
+    st.markdown("### MainBar")
+    st.dataframe(df_main)
+    st.markdown("### WasteBar")
+    st.dataframe(df_waste)
+    st.markdown("### PurchaseBar")
+    st.dataframe(df_purchase)
+    st.markdown("### Cutting Instructions")
+    st.dataframe(df_cutting)
+
+    # =========================
+    # PDF Generation
+    def generate_pdf(df_main, df_waste, df_purchase, df_cutting, price):
+        pdf = FPDF(orientation='L')
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(0, 10, "Rebar Optimization Report", ln=True, align="C")
+        pdf.ln(5)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(0, 8, "Created by Civil Engineer Moustafa Harmouch", ln=True)
+        pdf.cell(0, 8, f"Date: {datetime.date.today()}", ln=True)
+        pdf.ln(10)
+
+        # يمكن إضافة جميع الجداول هنا كما في الكود السابق
+        file_name = "Rebar_Report.pdf"
+        pdf.output(file_name)
+        return file_name
+
+    pdf_file = generate_pdf(df_main, df_waste, df_purchase, df_cutting, price)
     with open(pdf_file, "rb") as f:
         st.download_button("Download PDF Report", data=f, file_name=pdf_file, mime="application/pdf")
