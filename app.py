@@ -22,27 +22,22 @@ price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 # =========================
 # Initialize session_state
 if "bars_data" not in st.session_state:
-    st.session_state.bars_data = {d: pd.DataFrame(columns=["Length (m)","Quantity"]) for d in DIAMETERS}
+    st.session_state.bars_data = {d: [] for d in DIAMETERS}  # list of (length, quantity)
 
 # =========================
 # Input interface
 st.header("Enter bar lengths and quantities for each diameter")
-
 for d in DIAMETERS:
     with st.expander(f"Diameter {d} mm"):
-        df = st.session_state.bars_data[d]
-        st.dataframe(df)
-
-        # Inputs for new row
         col1, col2, col3 = st.columns([2,2,1])
         with col1:
             length = st.number_input(f"Length (m) - Diameter {d}", min_value=0.1, value=1.0, step=0.1, key=f"len_{d}")
         with col2:
             quantity = st.number_input(f"Quantity - Diameter {d}", min_value=1, value=1, step=1, key=f"qty_{d}")
         with col3:
-            if st.button(f"Add Row - Diameter {d}"):
-                new_row = pd.DataFrame([[length, int(quantity)]], columns=["Length (m)","Quantity"])
-                st.session_state.bars_data[d] = pd.concat([st.session_state.bars_data[d], new_row], ignore_index=True)
+            if st.button(f"Add - Diameter {d}"):
+                st.session_state.bars_data[d].append((length, int(quantity)))
+                st.success(f"Added Length {length} m x Quantity {quantity} for Diameter {d} mm")
 
 # =========================
 # ILP Function for optimal cutting
@@ -96,10 +91,9 @@ if st.button("Run Optimization"):
     cutting_data = []
 
     for d in DIAMETERS:
-        df_input = st.session_state.bars_data[d]
-        if df_input.empty:
+        length_qty = st.session_state.bars_data[d]
+        if not length_qty:
             continue
-        length_qty = [(row["Length (m)"], int(row["Quantity"])) for idx,row in df_input.iterrows()]
 
         # MainBar Table
         for l,q in length_qty:
