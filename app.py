@@ -63,9 +63,7 @@ def generate_pdf(main_df, waste_df, purchase_df, cutting_df, price):
     pdf.cell(0, 8, f"Date: {datetime.date.today()}", ln=True)
     pdf.ln(5)
 
-    # ----------------------
     # MainBar Table
-    # ----------------------
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(0, 8, "MainBar", ln=True)
     pdf.set_font("Arial", '', 8)
@@ -91,9 +89,7 @@ def generate_pdf(main_df, waste_df, purchase_df, cutting_df, price):
     pdf.cell(col_widths_main[3], 8, f"{total_weight:.2f}", border=1, align="C")
     pdf.ln(10)
 
-    # ----------------------
-    # Remaining Tables (Waste, Purchase, Cutting)
-    # ----------------------
+    # Remaining Tables
     for title, df_table in zip(
         ["WestBar", "Purchase 12m Bars", "Cutting Instructions"],
         [waste_df, purchase_df, cutting_df]
@@ -127,14 +123,7 @@ st.subheader("Created by Civil Engineer Moustafa Harmouch")
 
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 
-# -------- Reset Project --------
-if st.button("Reset Project"):
-    for d in DIAMETERS:
-        if f"rows_{d}" in st.session_state:
-            del st.session_state[f"rows_{d}"]
-    st.experimental_rerun()
-
-# -------- Input Section --------
+# Input Section
 data = {}
 for d in DIAMETERS:
     if f"rows_{d}" not in st.session_state:
@@ -156,9 +145,9 @@ for d in DIAMETERS:
         if lengths_list:
             data[d] = lengths_list
 
-# -------- Run Optimization --------
+# Run Optimization
 if st.button("Run Optimization"):
-    # --------- MainBar DataFrame ---------
+    # MainBar DataFrame
     main_rows = []
     for d, rows in st.session_state.items():
         if d.startswith("rows_"):
@@ -176,8 +165,7 @@ if st.button("Run Optimization"):
     if not main_df.empty:
         main_df = main_df.groupby(["Diameter","Length"]).agg({"Quantity":"sum","Weight":"sum"}).reset_index()
 
-    # --------- Optimization Calculations ---------
-    results = []
+    # Optimization Calculations
     waste_dict = defaultdict(lambda: {"count":0, "weight":0})
     purchase_list = []
     cutting_instr = []
@@ -214,7 +202,7 @@ if st.button("Run Optimization"):
     purchase_df = pd.DataFrame(purchase_list, columns=["Diameter","Bars","Weight (kg)","Cost"])
     cutting_df = pd.DataFrame(cutting_instr, columns=["Diameter","Pattern","Count"])
 
-    # --------- Display Tables ---------
+    # Display Tables
     st.success("Optimization Completed Successfully ✅")
     st.markdown("### MainBar")
     st.dataframe(main_df)
@@ -225,7 +213,7 @@ if st.button("Run Optimization"):
     st.markdown("### Cutting Instructions")
     st.dataframe(cutting_df)
 
-    # --------- Generate PDF ---------
+    # Generate PDF
     pdf_file = generate_pdf(main_df, waste_df, purchase_df, cutting_df, price)
     with open(pdf_file,"rb") as f:
         st.download_button("Download PDF Report", data=f, file_name=pdf_file, mime="application/pdf")
