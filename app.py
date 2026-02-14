@@ -3,16 +3,16 @@ import pandas as pd
 from fpdf import FPDF
 import datetime
 from collections import Counter
-from pulp import LpProblem, LpVariable, LpMinimize, lpSum, LpInteger
+from pulp import LpProblem, LpVariable, LpMinimize, lpSum, LpInteger, PULP_CBC_CMD
 
 # =========================
 # Settings
-DIAMETERS = [8,10,12,14,16,18,20,22,25,32]  # All common diameters
+DIAMETERS = [8,10,12,14,16,18,20,22,25,32]
 wpm_dict = {
     8:0.395, 10:0.617, 12:0.888, 14:1.21, 16:1.58,
     18:2.0, 20:2.47, 22:2.98, 25:3.85, 32:6.31
 }  # kg/m
-BAR_LENGTH = 12.0  # standard bar length
+BAR_LENGTH = 12.0
 
 # =========================
 # Streamlit Interface
@@ -22,59 +22,45 @@ st.subheader("Created by Civil Engineer Moustafa Harmouch")
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 
 # =========================
-# Input section: bar lengths and quantities
+# Initialize session_state for storing lengths per diameter
 for d in DIAMETERS:
     if f"rows_{d}" not in st.session_state:
         st.session_state[f"rows_{d}"] = []
 
 st.header("Enter bar lengths and quantities for each diameter")
 
+# =========================
+# Input form per diameter
 for d in DIAMETERS:
-    st.subheader(f"Diameter {d} mm")
-    length = st.number_input(f"Enter bar length (m) for {d} mm", min_value=0.1, value=1.0, step=0.1, key=f"length_{d}")
-    quantity = st.number_input(f"Enter quantity for this length for {d} mm", min_value=1, value=1, step=1, key=f"qty_{d}")
-    
-    if st.button(f"Add length for {d} mm"):
-        st.session_state[f"rows_{d}"].append((length, quantity))
-    
-    if st.session_state[f"rows_{d}"]:
-        st.write("Current entries:", st.session_state[f"rows_{d}"])
+    with st.expander(f"Diameter {d} mm"):
+        with st.form(key=f"form_{d}"):
+            length = st.number_input("Bar length (m)", min_value=0.1, value=1.0, step=0.1, key=f"length_{d}")
+            quantity = st.number_input("Quantity for this length", min_value=1, value=1, step=1, key=f"qty_{d}")
+            submitted = st.form_submit_button("Add length")
+            if submitted:
+                st.session_state[f"rows_{d}"].append((length, quantity))
+        # Show current entries
+        if st.session_state[f"rows_{d}"]:
+            df_current = pd.DataFrame(st.session_state[f"rows_{d}"], columns=["Length (m)", "Quantity"])
+            st.write("Current entries:", df_current)
 
 # =========================
 # ILP Optimization Function
 def optimize_cutting_ilp(length_qty_list):
-    """
-    Solve cutting stock problem for a single diameter
-    length_qty_list: [(length, quantity), ...]
-    Returns:
-        patterns_per_bar: list of lists (lengths in each 12m bar)
-        waste_per_bar: list of waste for each bar
-    """
     lengths = []
     for l, q in length_qty_list:
         lengths.extend([l]*q)
-    
     n = len(lengths)
-    max_bars = n  # worst-case: each length in separate bar
-    
+    max_bars = n
     prob = LpProblem("CuttingStock", LpMinimize)
-    
     x = [[LpVariable(f"x_{i}_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)] for i in range(n)]
     y = [LpVariable(f"y_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)]
-    
-    # Each length must be used once
     for i in range(n):
         prob += lpSum([x[i][j] for j in range(max_bars)]) == 1
-    
-    # Total lengths in each bar <= BAR_LENGTH
     for j in range(max_bars):
         prob += lpSum([lengths[i]*x[i][j] for i in range(n)]) <= BAR_LENGTH * y[j]
-    
-    # Objective: minimize number of bars used
     prob += lpSum([y[j] for j in range(max_bars)])
-    
-    prob.solve()
-    
+    prob.solve(PULP_CBC_CMD(msg=0))
     patterns = []
     waste_list = []
     for j in range(max_bars):
@@ -87,7 +73,6 @@ def optimize_cutting_ilp(length_qty_list):
         if bar:
             patterns.append(bar)
             waste_list.append(BAR_LENGTH - total_length)
-    
     return patterns, waste_list
 
 # =========================
@@ -104,7 +89,7 @@ if st.button("Run Optimization"):
         if not length_qty:
             continue
         
-        # MainBar
+        # MainBar Table
         for l, q in length_qty:
             w = l * q * wpm_dict[d]
             mainbar_data.append([d, l, q, w])
@@ -114,32 +99,31 @@ if st.button("Run Optimization"):
         # ILP Optimization per diameter
         patterns, waste_list = optimize_cutting_ilp(length_qty)
         
-        # WasteBar
+        # WasteBar Table
         for bar, waste in zip(patterns, waste_list):
             weight_waste = waste * wpm_dict[d]
             waste_data.append([d, round(sum(bar),2), len(bar), round(weight_waste,2)])
-        
-        # PurchaseBar
+        df_waste = pd.DataFrame(waste_data, columns=["Diameter","Bar Length (m)","Quantity","Weight (kg)"])
+        df_waste.sort_values("Diameter", inplace=True)
+
+        # PurchaseBar Table
         for bar in patterns:
             total_weight = sum(bar)*wpm_dict[d]
             cost = total_weight/1000*price
             purchase_data.append([d, 1, total_weight, cost])
-        
-        # Cutting Instructions
+        df_purchase = pd.DataFrame(purchase_data, columns=["Diameter","Bars","Weight (kg)","Cost"])
+        df_purchase.sort_values("Diameter", inplace=True)
+
+        # Cutting Instructions Table
         pattern_counts = Counter(tuple(bar) for bar in patterns)
         for pattern, count in pattern_counts.items():
             pattern_str = " + ".join([f"{l:.2f} m" for l in pattern])
             cutting_data.append([d, pattern_str, count])
+        df_cutting = pd.DataFrame(cutting_data, columns=["Diameter","Pattern","Count"])
+        df_cutting.sort_values("Diameter", inplace=True)
 
-    # Convert to DataFrames
-    df_waste = pd.DataFrame(waste_data, columns=["Diameter","Waste Length (m)","Quantity","Weight (kg)"])
-    df_waste.sort_values("Diameter", inplace=True)
-    df_purchase = pd.DataFrame(purchase_data, columns=["Diameter","Bars","Weight (kg)","Cost"])
-    df_purchase.sort_values("Diameter", inplace=True)
-    df_cutting = pd.DataFrame(cutting_data, columns=["Diameter","Pattern","Count"])
-    df_cutting.sort_values("Diameter", inplace=True)
-
-    # Display results
+    # =========================
+    # Display tables
     st.success("Optimization Completed Successfully ✅")
     st.markdown("### MainBar")
     st.dataframe(df_main)
@@ -164,7 +148,26 @@ if st.button("Run Optimization"):
         pdf.cell(0, 8, f"Date: {datetime.date.today()}", ln=True)
         pdf.ln(10)
 
-        # Here you can add all tables like before
+        # Function to add a table
+        def add_table(df, title):
+            pdf.set_font("Arial", 'B', 12)
+            pdf.cell(0, 8, title, ln=True)
+            pdf.set_font("Arial", '', 10)
+            col_widths = [30]*len(df.columns)
+            for header, w in zip(df.columns, col_widths):
+                pdf.cell(w, 8, header, border=1)
+            pdf.ln()
+            for i in range(len(df)):
+                for j, col in enumerate(df.columns):
+                    pdf.cell(col_widths[j], 8, str(df.iloc[i][col]), border=1)
+                pdf.ln()
+            pdf.ln(5)
+
+        add_table(df_main, "MainBar Table")
+        add_table(df_waste, "WasteBar Table")
+        add_table(df_purchase, "PurchaseBar Table")
+        add_table(df_cutting, "Cutting Instructions Table")
+
         file_name = "Rebar_Report.pdf"
         pdf.output(file_name)
         return file_name
