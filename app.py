@@ -20,24 +20,35 @@ st.subheader("Created by Civil Engineer Moustafa Harmouch")
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 
 # =========================
-# Initialize session_state
-if "bars_data" not in st.session_state:
-    st.session_state.bars_data = {d: [] for d in DIAMETERS}  # list of (length, quantity)
+# Initialize dynamic rows per diameter
+if "rows_count" not in st.session_state:
+    st.session_state.rows_count = {d:1 for d in DIAMETERS}  # initial row per diameter
+
+# Function to generate unique keys for each input field
+def key_len(d,i): return f"len_{d}_{i}"
+def key_qty(d,i): return f"qty_{d}_{i}"
 
 # =========================
 # Input interface
 st.header("Enter bar lengths and quantities for each diameter")
+
+input_data = {}  # temporary container for all inputs (will collect at Run)
+
 for d in DIAMETERS:
     with st.expander(f"Diameter {d} mm"):
-        col1, col2, col3 = st.columns([2,2,1])
-        with col1:
-            length = st.number_input(f"Length (m) - Diameter {d}", min_value=0.1, value=1.0, step=0.1, key=f"len_{d}")
-        with col2:
-            quantity = st.number_input(f"Quantity - Diameter {d}", min_value=1, value=1, step=1, key=f"qty_{d}")
+        rows = st.session_state.rows_count[d]
+        input_data[d] = []
+        for i in range(rows):
+            col1, col2, col3 = st.columns([2,2,1])
+            with col1:
+                length = st.number_input(f"Length (m) - Diameter {d} - Row {i+1}", min_value=0.1, value=1.0, step=0.1, key=key_len(d,i))
+            with col2:
+                quantity = st.number_input(f"Quantity - Diameter {d} - Row {i+1}", min_value=1, value=1, step=1, key=key_qty(d,i))
+            input_data[d].append((length, int(quantity)))
         with col3:
-            if st.button(f"Add - Diameter {d}"):
-                st.session_state.bars_data[d].append((length, int(quantity)))
-                st.success(f"Added Length {length} m x Quantity {quantity} for Diameter {d} mm")
+            if st.button(f"Add Row - Diameter {d}"):
+                st.session_state.rows_count[d] += 1
+                st.experimental_rerun()  # refresh to show new row
 
 # =========================
 # ILP Function for optimal cutting
@@ -91,7 +102,7 @@ if st.button("Run Optimization"):
     cutting_data = []
 
     for d in DIAMETERS:
-        length_qty = st.session_state.bars_data[d]
+        length_qty = input_data[d]
         if not length_qty:
             continue
 
