@@ -14,26 +14,26 @@ wpm_dict = {
 }
 BAR_LENGTH = 12.0
 
-st.title("Rebar Optimizer Pro - Add/Edit Inputs")
+st.title("Rebar Optimizer Pro")
 st.subheader("Created by Civil Engineer Moustafa Harmouch")
 
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 
 # =========================
-# Initialize session_state for each diameter
-for d in DIAMETERS:
-    if f"rows_{d}" not in st.session_state:
-        st.session_state[f"rows_{d}"] = pd.DataFrame(columns=["Length (m)","Quantity"])
-
-st.header("Enter bar lengths and quantities for each diameter")
+# Initialize session_state
+if "bars_data" not in st.session_state:
+    st.session_state.bars_data = {d: pd.DataFrame(columns=["Length (m)","Quantity"]) for d in DIAMETERS}
 
 # =========================
-# Input interface per diameter
+# Input interface
+st.header("Enter bar lengths and quantities for each diameter")
+
 for d in DIAMETERS:
     with st.expander(f"Diameter {d} mm"):
-        df = st.session_state[f"rows_{d}"]
+        df = st.session_state.bars_data[d]
         st.dataframe(df)
-        
+
+        # Inputs for new row
         col1, col2, col3 = st.columns([2,2,1])
         with col1:
             length = st.number_input(f"Length (m) - Diameter {d}", min_value=0.1, value=1.0, step=0.1, key=f"len_{d}")
@@ -41,41 +41,50 @@ for d in DIAMETERS:
             quantity = st.number_input(f"Quantity - Diameter {d}", min_value=1, value=1, step=1, key=f"qty_{d}")
         with col3:
             if st.button(f"Add Row - Diameter {d}"):
-                # Append to DataFrame
                 new_row = pd.DataFrame([[length, int(quantity)]], columns=["Length (m)","Quantity"])
-                st.session_state[f"rows_{d}"] = pd.concat([st.session_state[f"rows_{d}"], new_row], ignore_index=True)
+                st.session_state.bars_data[d] = pd.concat([st.session_state.bars_data[d], new_row], ignore_index=True)
 
 # =========================
-# ILP Optimization Function
-def optimize_cutting_ilp(length_qty_list):
+# ILP Function for optimal cutting
+def cutting_ilp(length_qty_list):
+    """Return patterns (list of lists) and waste per pattern"""
     lengths = []
-    for l, q in length_qty_list:
+    for l,q in length_qty_list:
         lengths.extend([l]*q)
-    n = len(lengths)
-    if n == 0:
+    if not lengths:
         return [], []
-    max_bars = n
+
+    n = len(lengths)
+    max_bars = n  # upper bound
     prob = LpProblem("CuttingStock", LpMinimize)
     x = [[LpVariable(f"x_{i}_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)] for i in range(n)]
     y = [LpVariable(f"y_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)]
+
+    # Each piece must be in exactly one bar
     for i in range(n):
         prob += lpSum([x[i][j] for j in range(max_bars)]) == 1
+
+    # Bar length constraints
     for j in range(max_bars):
         prob += lpSum([lengths[i]*x[i][j] for i in range(n)]) <= BAR_LENGTH * y[j]
+
+    # Minimize number of bars used
     prob += lpSum([y[j] for j in range(max_bars)])
     prob.solve(PULP_CBC_CMD(msg=0))
+
+    # Extract patterns
     patterns = []
     waste_list = []
     for j in range(max_bars):
         bar = []
-        total_length = 0
+        total_len = 0
         for i in range(n):
             if x[i][j].varValue > 0.5:
                 bar.append(lengths[i])
-                total_length += lengths[i]
+                total_len += lengths[i]
         if bar:
             patterns.append(bar)
-            waste_list.append(BAR_LENGTH - total_length)
+            waste_list.append(BAR_LENGTH - total_len)
     return patterns, waste_list
 
 # =========================
@@ -87,20 +96,20 @@ if st.button("Run Optimization"):
     cutting_data = []
 
     for d in DIAMETERS:
-        df_input = st.session_state[f"rows_{d}"]
+        df_input = st.session_state.bars_data[d]
         if df_input.empty:
             continue
         length_qty = [(row["Length (m)"], int(row["Quantity"])) for idx,row in df_input.iterrows()]
 
         # MainBar Table
-        for l, q in length_qty:
+        for l,q in length_qty:
             w = l*q*wpm_dict[d]
-            mainbar_data.append([d, l, q, w])
+            mainbar_data.append([d, l, q, round(w,2)])
         df_main = pd.DataFrame(mainbar_data, columns=["Diameter","Length","Quantity","Weight"])
         df_main.sort_values("Diameter", inplace=True)
 
         # ILP Optimization per diameter
-        patterns, waste_list = optimize_cutting_ilp(length_qty)
+        patterns, waste_list = cutting_ilp(length_qty)
 
         # WasteBar Table
         for bar, waste in zip(patterns, waste_list):
@@ -109,11 +118,11 @@ if st.button("Run Optimization"):
         df_waste = pd.DataFrame(waste_data, columns=["Diameter","Bar Length (m)","Quantity","Weight (kg)"])
         df_waste.sort_values("Diameter", inplace=True)
 
-        # PurchaseBar Table
+        # PurchaseBar Table (12m bars)
         for bar in patterns:
             total_weight = sum(bar)*wpm_dict[d]
             cost = total_weight/1000*price
-            purchase_data.append([d,1,total_weight,cost])
+            purchase_data.append([d, 1, round(total_weight,2), round(cost,2)])
         df_purchase = pd.DataFrame(purchase_data, columns=["Diameter","Bars","Weight (kg)","Cost"])
         df_purchase.sort_values("Diameter", inplace=True)
 
@@ -128,13 +137,13 @@ if st.button("Run Optimization"):
     # =========================
     # Display tables
     st.success("Optimization Completed Successfully ✅")
-    st.markdown("### MainBar")
+    st.markdown("### MainBar Table")
     st.dataframe(df_main)
-    st.markdown("### WasteBar")
+    st.markdown("### WasteBar Table")
     st.dataframe(df_waste)
-    st.markdown("### PurchaseBar")
+    st.markdown("### PurchaseBar Table")
     st.dataframe(df_purchase)
-    st.markdown("### Cutting Instructions")
+    st.markdown("### Cutting Instructions Table")
     st.dataframe(df_cutting)
 
     # =========================
