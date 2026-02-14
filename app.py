@@ -24,15 +24,12 @@ price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 if "rows_count" not in st.session_state:
     st.session_state.rows_count = {d:1 for d in DIAMETERS}  # initial row per diameter
 
-# Function to generate unique keys for each input field
-def key_len(d,i): return f"len_{d}_{i}"
-def key_qty(d,i): return f"qty_{d}_{i}"
-
 # =========================
 # Input interface
 st.header("Enter bar lengths and quantities for each diameter")
 
-input_data = {}  # temporary container for all inputs (will collect at Run)
+# Temporary container to read inputs at Run
+input_data = {}
 
 for d in DIAMETERS:
     with st.expander(f"Diameter {d} mm"):
@@ -41,19 +38,19 @@ for d in DIAMETERS:
         for i in range(rows):
             col1, col2, col3 = st.columns([2,2,1])
             with col1:
-                length = st.number_input(f"Length (m) - Diameter {d} - Row {i+1}", min_value=0.1, value=1.0, step=0.1, key=key_len(d,i))
+                length = st.number_input(f"Length (m) - Diameter {d} - Row {i+1}", min_value=0.1, value=1.0, step=0.1, key=f"len_{d}_{i}")
             with col2:
-                quantity = st.number_input(f"Quantity - Diameter {d} - Row {i+1}", min_value=1, value=1, step=1, key=key_qty(d,i))
+                quantity = st.number_input(f"Quantity - Diameter {d} - Row {i+1}", min_value=1, value=1, step=1, key=f"qty_{d}_{i}")
             input_data[d].append((length, int(quantity)))
-        with col3:
-            if st.button(f"Add Row - Diameter {d}"):
-                st.session_state.rows_count[d] += 1
-                st.experimental_rerun()  # refresh to show new row
+
+        # الزر خارج الحلقة
+        if st.button(f"Add Row - Diameter {d}", key=f"add_{d}"):
+            st.session_state.rows_count[d] += 1
+            # Streamlit سيعيد تشغيل السكربت تلقائيًا لعرض صف جديد
 
 # =========================
 # ILP Function for optimal cutting
 def cutting_ilp(length_qty_list):
-    """Return patterns (list of lists) and waste per pattern"""
     lengths = []
     for l,q in length_qty_list:
         lengths.extend([l]*q)
@@ -61,24 +58,20 @@ def cutting_ilp(length_qty_list):
         return [], []
 
     n = len(lengths)
-    max_bars = n  # upper bound
+    max_bars = n
     prob = LpProblem("CuttingStock", LpMinimize)
     x = [[LpVariable(f"x_{i}_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)] for i in range(n)]
     y = [LpVariable(f"y_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)]
 
-    # Each piece must be in exactly one bar
     for i in range(n):
         prob += lpSum([x[i][j] for j in range(max_bars)]) == 1
 
-    # Bar length constraints
     for j in range(max_bars):
         prob += lpSum([lengths[i]*x[i][j] for i in range(n)]) <= BAR_LENGTH * y[j]
 
-    # Minimize number of bars used
     prob += lpSum([y[j] for j in range(max_bars)])
     prob.solve(PULP_CBC_CMD(msg=0))
 
-    # Extract patterns
     patterns = []
     waste_list = []
     for j in range(max_bars):
