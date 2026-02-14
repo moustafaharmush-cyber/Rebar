@@ -7,9 +7,12 @@ from pulp import LpProblem, LpVariable, LpMinimize, lpSum, LpInteger
 
 # =========================
 # Settings
-DIAMETERS = [8, 10, 12]
-wpm_dict = {8: 0.395, 10: 0.617, 12: 0.888}  # kg/m
-BAR_LENGTH = 12.0
+DIAMETERS = [8,10,12,14,16,18,20,22,25,32]  # All common diameters
+wpm_dict = {
+    8:0.395, 10:0.617, 12:0.888, 14:1.21, 16:1.58,
+    18:2.0, 20:2.47, 22:2.98, 25:3.85, 32:6.31
+}  # kg/m
+BAR_LENGTH = 12.0  # standard bar length
 
 # =========================
 # Streamlit Interface
@@ -19,61 +22,59 @@ st.subheader("Created by Civil Engineer Moustafa Harmouch")
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 
 # =========================
-# إدخال الأطوال وعدد الأسياخ لكل قطر
+# Input section: bar lengths and quantities
 for d in DIAMETERS:
     if f"rows_{d}" not in st.session_state:
         st.session_state[f"rows_{d}"] = []
 
-st.header("إدخال أطوال الأسياخ لكل قطر")
+st.header("Enter bar lengths and quantities for each diameter")
 
 for d in DIAMETERS:
-    st.subheader(f"القطر {d} mm")
-    length = st.number_input(f"أدخل طول السيخ (متر) للقطر {d}", min_value=0.1, value=1.0, step=0.1, key=f"length_{d}")
-    quantity = st.number_input(f"أدخل عدد الأسياخ لهذا الطول للقطر {d}", min_value=1, value=1, step=1, key=f"qty_{d}")
+    st.subheader(f"Diameter {d} mm")
+    length = st.number_input(f"Enter bar length (m) for {d} mm", min_value=0.1, value=1.0, step=0.1, key=f"length_{d}")
+    quantity = st.number_input(f"Enter quantity for this length for {d} mm", min_value=1, value=1, step=1, key=f"qty_{d}")
     
-    if st.button(f"Add length for {d}mm"):
+    if st.button(f"Add length for {d} mm"):
         st.session_state[f"rows_{d}"].append((length, quantity))
     
     if st.session_state[f"rows_{d}"]:
         st.write("Current entries:", st.session_state[f"rows_{d}"])
 
 # =========================
-# ILP Optimization Function (Cutting Stock Problem)
+# ILP Optimization Function
 def optimize_cutting_ilp(length_qty_list):
     """
+    Solve cutting stock problem for a single diameter
     length_qty_list: [(length, quantity), ...]
     Returns:
-        patterns_per_bar: list of lists, كل قائمة تمثل طول الأسياخ داخل قضيب 12 متر
-        waste_per_bar: list of الهدر لكل قضيب
+        patterns_per_bar: list of lists (lengths in each 12m bar)
+        waste_per_bar: list of waste for each bar
     """
-    # توليد قائمة كل الأسياخ مع تكرارها
     lengths = []
     for l, q in length_qty_list:
         lengths.extend([l]*q)
     
     n = len(lengths)
-    max_bars = n  # أقصى عدد قضبان (worst case)
+    max_bars = n  # worst-case: each length in separate bar
     
     prob = LpProblem("CuttingStock", LpMinimize)
     
-    # متغيرات: x[i][j] = 1 إذا وضعت طول i في القضيب j
     x = [[LpVariable(f"x_{i}_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)] for i in range(n)]
     y = [LpVariable(f"y_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)]
     
-    # كل طول يجب أن يوضع مرة واحدة
+    # Each length must be used once
     for i in range(n):
         prob += lpSum([x[i][j] for j in range(max_bars)]) == 1
     
-    # مجموع الأطوال داخل كل قضيب ≤ 12 متر
+    # Total lengths in each bar <= BAR_LENGTH
     for j in range(max_bars):
         prob += lpSum([lengths[i]*x[i][j] for i in range(n)]) <= BAR_LENGTH * y[j]
     
-    # الهدف: تقليل عدد القضبان المستخدمة
+    # Objective: minimize number of bars used
     prob += lpSum([y[j] for j in range(max_bars)])
     
     prob.solve()
     
-    # استخراج النتائج
     patterns = []
     waste_list = []
     for j in range(max_bars):
@@ -110,7 +111,7 @@ if st.button("Run Optimization"):
         df_main = pd.DataFrame(mainbar_data, columns=["Diameter", "Length", "Quantity", "Weight"])
         df_main.sort_values("Diameter", inplace=True)
 
-        # ILP Optimization لكل قطر
+        # ILP Optimization per diameter
         patterns, waste_list = optimize_cutting_ilp(length_qty)
         
         # WasteBar
@@ -130,7 +131,7 @@ if st.button("Run Optimization"):
             pattern_str = " + ".join([f"{l:.2f} m" for l in pattern])
             cutting_data.append([d, pattern_str, count])
 
-    # تحويل إلى DataFrames
+    # Convert to DataFrames
     df_waste = pd.DataFrame(waste_data, columns=["Diameter","Waste Length (m)","Quantity","Weight (kg)"])
     df_waste.sort_values("Diameter", inplace=True)
     df_purchase = pd.DataFrame(purchase_data, columns=["Diameter","Bars","Weight (kg)","Cost"])
@@ -138,7 +139,7 @@ if st.button("Run Optimization"):
     df_cutting = pd.DataFrame(cutting_data, columns=["Diameter","Pattern","Count"])
     df_cutting.sort_values("Diameter", inplace=True)
 
-    # عرض النتائج
+    # Display results
     st.success("Optimization Completed Successfully ✅")
     st.markdown("### MainBar")
     st.dataframe(df_main)
@@ -163,7 +164,7 @@ if st.button("Run Optimization"):
         pdf.cell(0, 8, f"Date: {datetime.date.today()}", ln=True)
         pdf.ln(10)
 
-        # يمكن إضافة جميع الجداول هنا كما في الكود السابق
+        # Here you can add all tables like before
         file_name = "Rebar_Report.pdf"
         pdf.output(file_name)
         return file_name
