@@ -16,7 +16,7 @@ BAR_LENGTH = 12.0
 
 # =========================
 # Streamlit Interface
-st.title("Rebar Optimizer Pro - Accurate ILP")
+st.title("Rebar Optimizer Pro - Editable Inputs")
 st.subheader("Created by Civil Engineer Moustafa Harmouch")
 
 price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
@@ -25,24 +25,20 @@ price = st.number_input("Price per ton ($)", min_value=0.0, value=1000.0)
 # Initialize session_state for storing lengths per diameter
 for d in DIAMETERS:
     if f"rows_{d}" not in st.session_state:
-        st.session_state[f"rows_{d}"] = []
+        st.session_state[f"rows_{d}"] = pd.DataFrame(columns=["Length (m)", "Quantity"])
 
 st.header("Enter bar lengths and quantities for each diameter")
 
 # =========================
-# Input form per diameter
+# Input Data Editor per diameter
 for d in DIAMETERS:
     with st.expander(f"Diameter {d} mm"):
-        with st.form(key=f"form_{d}"):
-            length = st.number_input("Bar length (m)", min_value=0.1, value=1.0, step=0.1, key=f"length_{d}")
-            quantity = st.number_input("Quantity for this length", min_value=1, value=1, step=1, key=f"qty_{d}")
-            submitted = st.form_submit_button("Add length")
-            if submitted:
-                st.session_state[f"rows_{d}"].append((length, quantity))
-        # Show current entries
-        if st.session_state[f"rows_{d}"]:
-            df_current = pd.DataFrame(st.session_state[f"rows_{d}"], columns=["Length (m)", "Quantity"])
-            st.write("Current entries:", df_current)
+        df_input = st.experimental_data_editor(
+            st.session_state[f"rows_{d}"],
+            num_rows="dynamic",
+            key=f"editor_{d}"
+        )
+        st.session_state[f"rows_{d}"] = df_input
 
 # =========================
 # ILP Optimization Function
@@ -51,6 +47,8 @@ def optimize_cutting_ilp(length_qty_list):
     for l, q in length_qty_list:
         lengths.extend([l]*q)
     n = len(lengths)
+    if n == 0:
+        return [], []
     max_bars = n
     prob = LpProblem("CuttingStock", LpMinimize)
     x = [[LpVariable(f"x_{i}_{j}", cat=LpInteger, lowBound=0, upBound=1) for j in range(max_bars)] for i in range(n)]
@@ -85,10 +83,11 @@ if st.button("Run Optimization"):
     cutting_data = []
 
     for d in DIAMETERS:
-        length_qty = st.session_state[f"rows_{d}"]
-        if not length_qty:
+        df_input = st.session_state[f"rows_{d}"]
+        if df_input.empty:
             continue
-        
+        length_qty = [(row["Length (m)"], int(row["Quantity"])) for idx,row in df_input.iterrows()]
+
         # MainBar Table
         for l, q in length_qty:
             w = l * q * wpm_dict[d]
@@ -98,7 +97,7 @@ if st.button("Run Optimization"):
 
         # ILP Optimization per diameter
         patterns, waste_list = optimize_cutting_ilp(length_qty)
-        
+
         # WasteBar Table
         for bar, waste in zip(patterns, waste_list):
             weight_waste = waste * wpm_dict[d]
